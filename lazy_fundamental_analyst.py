@@ -11,6 +11,10 @@ import matplotlib.pyplot as plt
 import nasdaqdatalink as nasd
 from pandas import DatetimeIndex
 
+import requests
+import json
+import jsonpickle as jp
+
 
 def convert_date(some_date):
     if type(some_date) == str:
@@ -91,5 +95,86 @@ def signal_dates(func: Callable, data_df: pd.DataFrame, window: int) -> Datetime
 
 bullish_dates = signal_dates(bullish, s_and_p_eps_yearly, window=3)
 bearish_dates = signal_dates(bearish, s_and_p_eps_yearly, window=3)
+
+
+class BLSData:
+    """
+    A class that supports reading data from the Bureau of Labor Statistics (BLS)
+    REST end point.
+
+    This code is derived from the code published on the web page:
+    https://www.bls.gov/developers/api_python.htm
+
+    See also https://www.bd-econ.com/blsapi.html
+
+    start_year: the numerical year (e.g., 2021) as a string
+    end_year: same as start_year  start_year <= end_year
+    """
+    def __init__(self, start_year: str, end_year: str):
+        self.start_year = start_year
+        self.end_year = end_year
+        self.unemployment_data_id = 'LNS14000000'
+        self.bls_url = 'https://api.bls.gov/publicAPI/v2/timeseries/data/'
+        self.headers = {'Content-type': 'application/json'}
+        self.max_years = 10
+
+    def http_request(self, start_year: int, end_year: int) -> str:
+        request_json_str = {'seriesid': [self.unemployment_data_id],
+                            'startyear': str(start_year),
+                            'endyear': str(end_year)}
+        request_json = json.dumps(request_json_str)
+        http_data = requests.post(self.bls_url, data=request_json, headers=self.headers)
+        return http_data.text
+
+    def fetch_data(self, start_year: int, end_year: int) -> pd.DataFrame:
+        # The JSON for 'item' in the code below is:
+        # {'year': '2016',
+        # 'period': 'M12',
+        # 'periodName': 'December',
+        # 'value': '4.7',
+        #  'footnotes': [{}]}
+        #
+        json_str = self.http_request(start_year, end_year)
+        json_dict = jp.decode(json_str)
+        status = json_dict['status']
+        if status == 'REQUEST_NOT_PROCESSED':
+            raise Exception(json_dict['message'])
+        date_l = list()
+        value_l = list()
+        for series in json_dict['Results']['series']:
+            for item in series['data']:
+                year = item['year']
+                period = item['period']
+                value = float(item['value'])
+                period_date = datetime(year=int(year), month=int(period[1:]), day=1)
+                value_l.append(value)
+                date_l.append(period_date)
+        period_df = pd.DataFrame(value_l)
+        period_df.index = date_l
+        # Make sure that dates are in increasing order
+        period_df.sort_index(inplace=True)
+        return period_df
+
+    def get_unemployment_data(self) -> pd.DataFrame:
+        start_year_i = int(self.start_year)
+        end_year_i = int(self.end_year)
+        unemployment_df = pd.DataFrame()
+        while start_year_i < end_year_i:
+            period_end = min(((start_year_i + self.max_years) - 1), end_year_i)
+            period_data_df = self.fetch_data(start_year_i, period_end)
+            unemployment_df = pd.concat([unemployment_df, period_data_df], axis=0)
+            delta = (period_end - start_year_i) + 1
+            start_year_i = start_year_i + delta
+        unemployment_df.columns = ['unemployment']
+        return unemployment_df
+
+
+bls_start_year: str = '2007'
+bls_end_year: str = str(datetime.today().year)
+bls_data = BLSData(bls_start_year, bls_end_year)
+bls_unemployment_df = bls_data.get_unemployment_data()
+
+bls_unemployment_df.plot(grid=True, title='Monthly Unemployment Rate (percent)', figsize=(10, 6))
+plt.show()
 
 pass
