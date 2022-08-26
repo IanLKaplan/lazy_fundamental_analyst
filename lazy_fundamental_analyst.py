@@ -2,7 +2,6 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Callable
 
-import yfinance as yf
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -11,6 +10,9 @@ import matplotlib.pyplot as plt
 # pip install Nasdaq-Data-Link
 import nasdaqdatalink as nasd
 from pandas import DatetimeIndex
+
+# pip install pandas-datareader
+from pandas_datareader import data
 
 import requests
 import json
@@ -197,8 +199,46 @@ bls_data = BLSData(bls_start_year, bls_end_year)
 # (e.g., there is a lot of noise in unemployment numbers)
 bls_unemployment_df = round(bls_data.get_unemployment_data(), 0)
 
-bls_unemployment_df.plot(grid=True, title='Monthly Unemployment Rate (percent)', figsize=(10, 6))
-plt.show()
+# bls_unemployment_df.plot(grid=True, title='Monthly Unemployment Rate (percent)', figsize=(10, 6))
+# plt.show()
+
+def get_market_data(file_name: str,
+                    data_col: str,
+                    symbols: List,
+                    data_source: str,
+                    start_date: datetime,
+                    end_date: datetime) -> pd.DataFrame:
+    """
+      file_name: the file name in the temp directory that will be used to store the data
+      data_col: the type of data - 'Adj Close', 'Close', 'High', 'Low', 'Open', Volume'
+      symbols: a list of symbols to fetch data for
+      data_source: yahoo, etc...
+      start_date: the start date for the time series
+      end_date: the end data for the time series
+      Returns: a Pandas DataFrame containing the data.
+
+      If a file of market data does not already exist in the temporary directory, fetch it from the
+      data_source.
+    """
+    temp_root: str = tempfile.gettempdir() + '/'
+    file_path: str = temp_root + file_name
+    temp_file_path = Path(file_path)
+    file_size = 0
+    if temp_file_path.exists():
+        file_size = temp_file_path.stat().st_size
+
+    if file_size > 0:
+        close_data = pd.read_csv(file_path, index_col='Date')
+    else:
+        if type(symbols) == str:
+            t = list()
+            t.append(symbols)
+            symbols = t
+        panel_data: pd.DataFrame = data.DataReader(symbols, data_source, start_date, end_date)
+        close_data: pd.DataFrame = panel_data[data_col]
+        close_data.to_csv(file_path)
+    assert len(close_data) > 0, f'Error reading data for {symbols}'
+    return close_data
 
 
 def bullish(data_df: pd.DataFrame, window: int) -> list:
@@ -224,7 +264,22 @@ def signal_dates(func: Callable, data_df: pd.DataFrame, window: int) -> Datetime
     return dates
 
 
-bullish_dates = signal_dates(bullish, eps_yearly, window=3)
-bearish_dates = signal_dates(bearish, eps_yearly, window=3)
+spy_data_file = 'spy_close.csv'
+spy_close_df = get_market_data(file_name=spy_data_file,
+                               data_col='Close',
+                               symbols=['spy'],
+                               data_source='yahoo',
+                               start_date=start_date,
+                               end_date=end_date)
+
+
+eps_bullish_dates = signal_dates(bullish, eps_yearly, window=3)
+emp_bullish_dates = signal_dates(bullish, bls_unemployment_df, window=3)
+
+eps_bearish_dates = signal_dates(bearish, eps_yearly, window=3)
+emp_bearish_dates = signal_dates(bearish, bls_unemployment_df, window=3)
+
+bearish_dates_1 = eps_bearish_dates.isin(emp_bearish_dates)
+bearish_dates_2 = emp_bearish_dates.isin(eps_bearish_dates)
 
 pass
