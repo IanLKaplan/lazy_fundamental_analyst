@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import List, Callable
 
 import yfinance as yf
@@ -14,6 +15,8 @@ from pandas import DatetimeIndex
 import requests
 import json
 import jsonpickle as jp
+
+import tempfile
 
 
 def convert_date(some_date):
@@ -51,23 +54,148 @@ start_date: datetime = datetime.fromisoformat(start_date_str)
 # The "current date"
 end_date: datetime = datetime.today() - timedelta(days=1)
 
-# For all of the S&P ratios see https://data.nasdaq.com/data/MULTPL-sp-500-ratios
-# https://data.nasdaq.com/data/MULTPL/SP500_EARNINGS_YIELD_MONTH-sp-500-earnings-yield-by-month
-# Monthly EPS estimates from 1871(!) to present
-s_and_p_eps_raw = nasd.get("MULTPL/SP500_EARNINGS_YIELD_MONTH")
 
-eps_index = s_and_p_eps_raw.index
-ix_start = findDateIndex(eps_index, start_date - timedelta(weeks=52))
-s_and_p_eps = s_and_p_eps_raw[:][ix_start:]
+class NASDQData:
+    def __init__(self, eps_start_date: datetime):
+        self.start_date = eps_start_date
+        self.S_AND_P_EARNINGS_KEY = "MULTPL/SP500_EARNINGS_YIELD_MONTH"
+        self.s_and_p_earnings_file = "s_and_p_earnings.csv"
 
-# s_and_p_eps.plot(grid=True, title="Monthly S&P 500 Earnings per share", figsize=(10, 6))
-# plt.show()
+    def get_s_and_p_earnings(self) -> pd.DataFrame:
+        temp_root: str = tempfile.gettempdir() + '/'
+        file_path: str = temp_root + self.s_and_p_earnings_file
+        temp_file_path = Path(file_path)
+        file_size = 0
+        if temp_file_path.exists():
+            file_size = temp_file_path.stat().st_size
 
-s_and_p_eps_yearly = s_and_p_eps.rolling(12).sum()
-s_and_p_eps_yearly = s_and_p_eps_yearly[:][12:]
+        if file_size > 0:
+            s_and_p_eps_yearly = pd.read_csv(file_path, index_col='Date')
+        else:
+            # For all of the S&P ratios see https://data.nasdaq.com/data/MULTPL-sp-500-ratios
+            # https://data.nasdaq.com/data/MULTPL/SP500_EARNINGS_YIELD_MONTH-sp-500-earnings-yield-by-month
+            # Monthly EPS estimates from 1871(!) to present
+            s_and_p_eps_raw = nasd.get("MULTPL/SP500_EARNINGS_YIELD_MONTH")
 
-# s_and_p_eps_yearly.plot(grid=True, title="Yearly S&P 500 Earnings per share, by month", figsize=(10, 6))
-# plt.show()
+            eps_index = s_and_p_eps_raw.index
+            ix_start = findDateIndex(eps_index, start_date - timedelta(weeks=52))
+            s_and_p_eps = s_and_p_eps_raw[:][ix_start:]
+
+            # s_and_p_eps.plot(grid=True, title="Monthly S&P 500 Earnings per share", figsize=(10, 6))
+            # plt.show()
+
+            s_and_p_eps_yearly = s_and_p_eps.rolling(12).sum()
+            s_and_p_eps_yearly = round(s_and_p_eps_yearly[:][12:], 2)
+            s_and_p_eps_yearly.to_csv(file_path)
+        return s_and_p_eps_yearly
+
+
+nasdq_data = NASDQData(start_date)
+eps_yearly = nasdq_data.get_s_and_p_earnings()
+eps_yearly.plot(grid=True, title="Yearly S&P 500 Earnings per share, by month", figsize=(10, 6))
+plt.show()
+
+
+class BLSData:
+    """
+    A class that supports reading data from the Bureau of Labor Statistics (BLS)
+    REST end point.
+
+    This code is derived from the code published on the web page:
+    https://www.bls.gov/developers/api_python.htm
+
+    See also https://www.bd-econ.com/blsapi.html
+
+    start_year: the numerical year (e.g., 2021) as a string
+    end_year: same as start_year  start_year <= end_year
+
+    This class writes the data out to a temp file, so that the file can be read
+    in subsequent runs.  This avoids running into the BLS daily download limit.
+    This also improves performance.
+    """
+    def __init__(self, start_year: str, end_year: str):
+        self.start_year = start_year
+        self.end_year = end_year
+        self.unemployment_data_id = 'LNS14000000'
+        self.bls_url = 'https://api.bls.gov/publicAPI/v2/timeseries/data/'
+        self.headers = {'Content-type': 'application/json'}
+        self.max_years = 10
+        self.bls_file_name = 'bls_monthly_unemployment.csv'
+
+    def http_request(self, start_year: int, end_year: int) -> str:
+        request_json_str = {'seriesid': [self.unemployment_data_id],
+                            'startyear': str(start_year),
+                            'endyear': str(end_year)}
+        request_json = json.dumps(request_json_str)
+        http_data = requests.post(self.bls_url, data=request_json, headers=self.headers)
+        return http_data.text
+
+    def fetch_data(self, start_year: int, end_year: int) -> pd.DataFrame:
+        # The JSON for 'item' in the code below is:
+        # {'year': '2016',
+        # 'period': 'M12',
+        # 'periodName': 'December',
+        # 'value': '4.7',
+        #  'footnotes': [{}]}
+        #
+        json_str = self.http_request(start_year, end_year)
+        json_dict = jp.decode(json_str)
+        status = json_dict['status']
+        if status != 'REQUEST_SUCCEEDED':
+            raise Exception(json_dict['message'])
+        date_l = list()
+        value_l = list()
+        for series in json_dict['Results']['series']:
+            for item in series['data']:
+                year = item['year']
+                period = item['period']
+                value = float(item['value'])
+                period_date = datetime(year=int(year), month=int(period[1:]), day=1)
+                value_l.append(value)
+                date_l.append(period_date)
+        period_df = pd.DataFrame(value_l)
+        period_df.index = date_l
+        # Make sure that dates are in increasing order
+        period_df.sort_index(inplace=True)
+        return period_df
+
+    def get_unemployment_data_from_bls(self) -> pd.DataFrame:
+        start_year_i = int(self.start_year)
+        end_year_i = int(self.end_year)
+        unemployment_df = pd.DataFrame()
+        while start_year_i < end_year_i:
+            period_end = min(((start_year_i + self.max_years) - 1), end_year_i)
+            period_data_df = self.fetch_data(start_year_i, period_end)
+            unemployment_df = pd.concat([unemployment_df, period_data_df], axis=0)
+            delta = (period_end - start_year_i) + 1
+            start_year_i = start_year_i + delta
+        unemployment_df.columns = ['unemployment']
+        unemployment_df.index.name = 'Date'
+        return unemployment_df
+
+    def get_unemployment_data(self) -> pd.DataFrame:
+        temp_root: str = tempfile.gettempdir() + '/'
+        file_path: str = temp_root + self.bls_file_name
+        temp_file_path = Path(file_path)
+        file_size = 0
+        if temp_file_path.exists():
+            file_size = temp_file_path.stat().st_size
+
+        if file_size > 0:
+            unemployment_data_df = pd.read_csv(file_path, index_col='Date')
+        else:
+            unemployment_data_df = self.get_unemployment_data_from_bls()
+            unemployment_data_df.to_csv(file_path)
+        return unemployment_data_df
+
+
+bls_start_year: str = '2007'
+bls_end_year: str = str(datetime.today().year)
+bls_data = BLSData(bls_start_year, bls_end_year)
+bls_unemployment_df = bls_data.get_unemployment_data()
+
+bls_unemployment_df.plot(grid=True, title='Monthly Unemployment Rate (percent)', figsize=(10, 6))
+plt.show()
 
 
 def bullish(data_df: pd.DataFrame, window: int) -> list:
@@ -93,88 +221,7 @@ def signal_dates(func: Callable, data_df: pd.DataFrame, window: int) -> Datetime
     return dates
 
 
-bullish_dates = signal_dates(bullish, s_and_p_eps_yearly, window=3)
-bearish_dates = signal_dates(bearish, s_and_p_eps_yearly, window=3)
-
-
-class BLSData:
-    """
-    A class that supports reading data from the Bureau of Labor Statistics (BLS)
-    REST end point.
-
-    This code is derived from the code published on the web page:
-    https://www.bls.gov/developers/api_python.htm
-
-    See also https://www.bd-econ.com/blsapi.html
-
-    start_year: the numerical year (e.g., 2021) as a string
-    end_year: same as start_year  start_year <= end_year
-    """
-    def __init__(self, start_year: str, end_year: str):
-        self.start_year = start_year
-        self.end_year = end_year
-        self.unemployment_data_id = 'LNS14000000'
-        self.bls_url = 'https://api.bls.gov/publicAPI/v2/timeseries/data/'
-        self.headers = {'Content-type': 'application/json'}
-        self.max_years = 10
-
-    def http_request(self, start_year: int, end_year: int) -> str:
-        request_json_str = {'seriesid': [self.unemployment_data_id],
-                            'startyear': str(start_year),
-                            'endyear': str(end_year)}
-        request_json = json.dumps(request_json_str)
-        http_data = requests.post(self.bls_url, data=request_json, headers=self.headers)
-        return http_data.text
-
-    def fetch_data(self, start_year: int, end_year: int) -> pd.DataFrame:
-        # The JSON for 'item' in the code below is:
-        # {'year': '2016',
-        # 'period': 'M12',
-        # 'periodName': 'December',
-        # 'value': '4.7',
-        #  'footnotes': [{}]}
-        #
-        json_str = self.http_request(start_year, end_year)
-        json_dict = jp.decode(json_str)
-        status = json_dict['status']
-        if status == 'REQUEST_NOT_PROCESSED':
-            raise Exception(json_dict['message'])
-        date_l = list()
-        value_l = list()
-        for series in json_dict['Results']['series']:
-            for item in series['data']:
-                year = item['year']
-                period = item['period']
-                value = float(item['value'])
-                period_date = datetime(year=int(year), month=int(period[1:]), day=1)
-                value_l.append(value)
-                date_l.append(period_date)
-        period_df = pd.DataFrame(value_l)
-        period_df.index = date_l
-        # Make sure that dates are in increasing order
-        period_df.sort_index(inplace=True)
-        return period_df
-
-    def get_unemployment_data(self) -> pd.DataFrame:
-        start_year_i = int(self.start_year)
-        end_year_i = int(self.end_year)
-        unemployment_df = pd.DataFrame()
-        while start_year_i < end_year_i:
-            period_end = min(((start_year_i + self.max_years) - 1), end_year_i)
-            period_data_df = self.fetch_data(start_year_i, period_end)
-            unemployment_df = pd.concat([unemployment_df, period_data_df], axis=0)
-            delta = (period_end - start_year_i) + 1
-            start_year_i = start_year_i + delta
-        unemployment_df.columns = ['unemployment']
-        return unemployment_df
-
-
-bls_start_year: str = '2007'
-bls_end_year: str = str(datetime.today().year)
-bls_data = BLSData(bls_start_year, bls_end_year)
-bls_unemployment_df = bls_data.get_unemployment_data()
-
-bls_unemployment_df.plot(grid=True, title='Monthly Unemployment Rate (percent)', figsize=(10, 6))
-plt.show()
+bullish_dates = signal_dates(bullish, eps_yearly, window=3)
+bearish_dates = signal_dates(bearish, eps_yearly, window=3)
 
 pass
