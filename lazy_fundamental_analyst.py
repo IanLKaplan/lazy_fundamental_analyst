@@ -92,8 +92,8 @@ class NASDQData:
 
 nasdq_data = NASDQData(start_date)
 eps_yearly = nasdq_data.get_s_and_p_earnings()
-eps_yearly.plot(grid=True, title="Yearly S&P 500 Earnings per share, by month", figsize=(10, 6))
-plt.show()
+# eps_yearly.plot(grid=True, title="Yearly S&P 500 Earnings per share, by month", figsize=(10, 6))
+# plt.show()
 
 
 class BLSData:
@@ -192,7 +192,10 @@ class BLSData:
 bls_start_year: str = '2007'
 bls_end_year: str = str(datetime.today().year)
 bls_data = BLSData(bls_start_year, bls_end_year)
-bls_unemployment_df = bls_data.get_unemployment_data()
+#
+# Round to a whole number since fractional unemployment values are not very accurate
+# (e.g., there is a lot of noise in unemployment numbers)
+bls_unemployment_df = round(bls_data.get_unemployment_data(), 0)
 
 bls_unemployment_df.plot(grid=True, title='Monthly Unemployment Rate (percent)', figsize=(10, 6))
 plt.show()
