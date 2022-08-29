@@ -1,3 +1,4 @@
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Callable
@@ -58,9 +59,13 @@ end_date: datetime = datetime.today() - timedelta(days=1)
 
 
 class NASDQData:
+    """
+    eps_start_date: the data that the rolling 12-month sum should start at
+    """
     def __init__(self, eps_start_date: datetime):
         self.start_date = eps_start_date
         self.S_AND_P_EARNINGS_KEY = "MULTPL/SP500_EARNINGS_YIELD_MONTH"
+        self.DATALINK_KEY = 'NASDAQ_DATA_LINK_API_KEY'
         self.s_and_p_earnings_file = "s_and_p_earnings.csv"
 
     def get_s_and_p_earnings(self) -> pd.DataFrame:
@@ -74,24 +79,29 @@ class NASDQData:
         if file_size > 0:
             s_and_p_eps_yearly = pd.read_csv(file_path, index_col='Date')
         else:
+            nasdaq_datalink_key = os.environ.get(self.DATALINK_KEY)
+            if nasdaq_datalink_key == None:
+                print("Warning: no NASDAQ data link key has been set in the environment")
             # For all of the S&P ratios see https://data.nasdaq.com/data/MULTPL-sp-500-ratios
             # https://data.nasdaq.com/data/MULTPL/SP500_EARNINGS_YIELD_MONTH-sp-500-earnings-yield-by-month
-            # Monthly EPS estimates from 1871(!) to present
-            s_and_p_eps_raw = nasd.get("MULTPL/SP500_EARNINGS_YIELD_MONTH")
+            try:
+                back_start_date =  self.start_date - timedelta(weeks=56)
+                s_and_p_eps_raw = nasd.get("MULTPL/SP500_EARNINGS_YIELD_MONTH", start_date=back_start_date)
+                eps_index = s_and_p_eps_raw.index
+                ix_start = findDateIndex(eps_index, self.start_date - timedelta(weeks=52))
+                assert ix_start >= 0
+                s_and_p_eps = s_and_p_eps_raw[:][ix_start:]
+                s_and_p_eps_yearly = s_and_p_eps.rolling(12).sum()
+                s_and_p_eps_yearly = round(s_and_p_eps_yearly[:][12:], 2)
+                s_and_p_eps_yearly.to_csv(file_path)
+            except Exception as e:
+                raise Exception(f'nasdaq-data-link error: {str(e)}')
 
-            eps_index = s_and_p_eps_raw.index
-            ix_start = findDateIndex(eps_index, start_date - timedelta(weeks=52))
-            s_and_p_eps = s_and_p_eps_raw[:][ix_start:]
-
-            # s_and_p_eps.plot(grid=True, title="Monthly S&P 500 Earnings per share", figsize=(10, 6))
-            # plt.show()
-
-            s_and_p_eps_yearly = s_and_p_eps.rolling(12).sum()
-            s_and_p_eps_yearly = round(s_and_p_eps_yearly[:][12:], 2)
-            s_and_p_eps_yearly.to_csv(file_path)
         return s_and_p_eps_yearly
 
 
+# The data returned will be the rolling yearly sum, so the start_date is backed up by a year to properly start
+# on start-date.
 nasdq_data = NASDQData(start_date)
 eps_yearly = nasdq_data.get_s_and_p_earnings()
 # eps_yearly.plot(grid=True, title="Yearly S&P 500 Earnings per share, by month", figsize=(10, 6))
@@ -264,9 +274,9 @@ def signal_dates(func: Callable, data_df: pd.DataFrame, window: int) -> Datetime
     return dates
 
 
-spy_data_file = 'spy_close.csv'
+spy_data_file = 'spy_adj_close.csv'
 spy_close_df = get_market_data(file_name=spy_data_file,
-                               data_col='Close',
+                               data_col='Adj Close',
                                symbols=['spy'],
                                data_source='yahoo',
                                start_date=start_date,
