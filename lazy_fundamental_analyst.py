@@ -6,6 +6,7 @@ from typing import List, Callable
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 
 # https://data.nasdaq.com/tools/python
 # pip install Nasdaq-Data-Link
@@ -20,6 +21,8 @@ import json
 import jsonpickle as jp
 
 import tempfile
+
+plt.style.use('seaborn-whitegrid')
 
 
 def convert_date(some_date):
@@ -62,6 +65,7 @@ class NASDQData:
     """
     eps_start_date: the data that the rolling 12-month sum should start at
     """
+
     def __init__(self, eps_start_date: datetime):
         self.start_date = eps_start_date
         self.S_AND_P_EARNINGS_KEY = "MULTPL/SP500_EARNINGS_YIELD_MONTH"
@@ -85,14 +89,16 @@ class NASDQData:
             # For all of the S&P ratios see https://data.nasdaq.com/data/MULTPL-sp-500-ratios
             # https://data.nasdaq.com/data/MULTPL/SP500_EARNINGS_YIELD_MONTH-sp-500-earnings-yield-by-month
             try:
-                back_start_date =  self.start_date - timedelta(weeks=56)
+                back_start_date = self.start_date - timedelta(weeks=56)
                 s_and_p_eps_raw = nasd.get("MULTPL/SP500_EARNINGS_YIELD_MONTH", start_date=back_start_date)
                 eps_index = s_and_p_eps_raw.index
                 ix_start = findDateIndex(eps_index, self.start_date - timedelta(weeks=52))
                 assert ix_start >= 0
                 s_and_p_eps = s_and_p_eps_raw[:][ix_start:]
                 s_and_p_eps_yearly = s_and_p_eps.rolling(12).sum()
-                s_and_p_eps_yearly = round(s_and_p_eps_yearly[:][12:], 2)
+                ix_start = findDateIndex(eps_index, self.start_date)
+                assert ix_start >= 0
+                s_and_p_eps_yearly = round(s_and_p_eps_yearly[:][ix_start:], 2)
                 s_and_p_eps_yearly.to_csv(file_path)
             except Exception as e:
                 raise Exception(f'nasdaq-data-link error: {str(e)}')
@@ -104,6 +110,8 @@ class NASDQData:
 # on start-date.
 nasdq_data = NASDQData(start_date)
 eps_yearly = nasdq_data.get_s_and_p_earnings()
+
+
 # eps_yearly.plot(grid=True, title="Yearly S&P 500 Earnings per share, by month", figsize=(10, 6))
 # plt.show()
 
@@ -125,6 +133,7 @@ class BLSData:
     in subsequent runs.  This avoids running into the BLS daily download limit.
     This also improves performance.
     """
+
     def __init__(self, start_year: str, end_year: str):
         self.start_year = start_year
         self.end_year = end_year
@@ -207,7 +216,8 @@ bls_data = BLSData(bls_start_year, bls_end_year)
 #
 # Round to a whole number since fractional unemployment values are not very accurate
 # (e.g., there is a lot of noise in unemployment numbers)
-bls_unemployment_df = round(bls_data.get_unemployment_data(), 0)
+bls_unemployment_df = round(bls_data.get_unemployment_data(), 2)
+
 
 # bls_unemployment_df.plot(grid=True, title='Monthly Unemployment Rate (percent)', figsize=(10, 6))
 # plt.show()
@@ -254,7 +264,7 @@ def get_market_data(file_name: str,
 def bullish(data_df: pd.DataFrame, window: int) -> list:
     bullish_ix: List[int] = list()
     for i in range(window, data_df.shape[0]):
-        if data_df.iloc[i].values[0] > data_df.iloc[i-window].values[0]:
+        if data_df.iloc[i].values[0] >= data_df.iloc[i - window].values[0]:
             bullish_ix.append(i)
     return bullish_ix
 
@@ -262,16 +272,41 @@ def bullish(data_df: pd.DataFrame, window: int) -> list:
 def bearish(data_df: pd.DataFrame, window: int) -> list:
     bearish_ix: List[int] = list()
     for i in range(window, data_df.shape[0]):
-        if data_df.iloc[i].values[0] < data_df.iloc[i-window].values[0]:
+        if data_df.iloc[i].values[0] < data_df.iloc[i - window].values[0]:
             bearish_ix.append(i)
     return bearish_ix
 
 
 def signal_dates(func: Callable, data_df: pd.DataFrame, window: int) -> DatetimeIndex:
-    ix = func(data_df, window)
+    ix_l: List[int] = func(data_df, window)
     index = data_df.index
-    dates = index[ix]
+    dates = index[ix_l]
     return dates
+
+
+def plot_hedge(instrument_df: pd.DataFrame, hedge_df: pd.DataFrame, title: str) -> None:
+    fig, ax = plt.subplots(figsize=(10, 6))
+    plt.gca().xaxis.set_major_locator(mdates.YearLocator())
+    fig.autofmt_xdate()
+    ax.plot(instrument_df, label=str(instrument_df.columns[0]))
+    ax.plot(hedge_df, 'x', label=str(hedge_df.columns[0]))
+    plt.title(title)
+    ax.grid(visible=True)
+    leg = ax.legend()
+    plt.xlabel('Date')
+    plt.ylabel('Close Price')
+
+
+def get_market_indexes(market_df: pd.DataFrame, index_dates: DatetimeIndex) -> List[int]:
+    ix_l: List = list()
+    market_index = market_df.index
+    for date_ in index_dates:
+        ix = findDateIndex(date_index=market_index, search_date=date_)
+        if ix >= 0:
+            ix_l.append(ix)
+        else:
+            print(f'Did not find date {date_}')
+    return ix_l
 
 
 spy_data_file = 'spy_adj_close.csv'
@@ -282,14 +317,36 @@ spy_close_df = get_market_data(file_name=spy_data_file,
                                start_date=start_date,
                                end_date=end_date)
 
-
 eps_bullish_dates = signal_dates(bullish, eps_yearly, window=3)
 emp_bullish_dates = signal_dates(bullish, bls_unemployment_df, window=3)
 
-eps_bearish_dates = signal_dates(bearish, eps_yearly, window=3)
-emp_bearish_dates = signal_dates(bearish, bls_unemployment_df, window=3)
+eps_bearish_dates: pd.DatetimeIndex = signal_dates(bearish, eps_yearly, window=3)
+emp_bearish_dates: pd.DatetimeIndex = signal_dates(bearish, bls_unemployment_df, window=3)
 
-bearish_dates_1 = eps_bearish_dates.isin(emp_bearish_dates)
-bearish_dates_2 = emp_bearish_dates.isin(eps_bearish_dates)
+eps_ix_l = get_market_indexes(spy_close_df, eps_bearish_dates)
+spy_eps_bear_df = spy_close_df.iloc[eps_ix_l]
+plot_hedge(spy_close_df, spy_eps_bear_df, 'EPS Momentum Bear Signal')
+plt.show()
+
+emp_ix_l = get_market_indexes(spy_close_df, emp_bearish_dates)
+spy_emp_bear_df = spy_close_df.iloc[emp_ix_l]
+plot_hedge(spy_close_df, spy_emp_bear_df, "Employment Momentum Bear Signal")
+plt.show()
+
+
+if len(eps_bearish_dates) >= len(emp_bearish_dates):
+    bearish_dates_ = emp_bearish_dates.isin(eps_bearish_dates)
+    bearish_dates = emp_bearish_dates[bearish_dates_]
+else:
+    bearish_dates_ = eps_bearish_dates.isin(emp_bearish_dates)
+    bearish_dates = eps_bearish_dates[bearish_dates_]
+
+
+ix_l = get_market_indexes(spy_close_df, bearish_dates)
+spy_bear_df: pd.DataFrame = spy_close_df.iloc[ix_l]
+spy_bear_df.columns = ['Hedge']
+
+plot_hedge(spy_close_df, spy_bear_df, 'EPS and Unemployment Momentum Bear Signal')
+plt.show()
 
 pass
