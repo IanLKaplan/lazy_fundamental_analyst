@@ -261,15 +261,15 @@ def get_market_data(file_name: str,
     return close_data
 
 
-def bullish(data_df: pd.DataFrame, window: int) -> list:
+def increasing(data_df: pd.DataFrame, window: int) -> list:
     bullish_ix: List[int] = list()
     for i in range(window, data_df.shape[0]):
-        if data_df.iloc[i].values[0] >= data_df.iloc[i - window].values[0]:
+        if data_df.iloc[i].values[0] > data_df.iloc[i - window].values[0]:
             bullish_ix.append(i)
     return bullish_ix
 
 
-def bearish(data_df: pd.DataFrame, window: int) -> list:
+def decreasing(data_df: pd.DataFrame, window: int) -> list:
     bearish_ix: List[int] = list()
     for i in range(window, data_df.shape[0]):
         if data_df.iloc[i].values[0] < data_df.iloc[i - window].values[0]:
@@ -317,11 +317,11 @@ spy_close_df = get_market_data(file_name=spy_data_file,
                                start_date=start_date,
                                end_date=end_date)
 
-eps_bullish_dates = signal_dates(bullish, eps_yearly, window=3)
-emp_bullish_dates = signal_dates(bullish, bls_unemployment_df, window=3)
+eps_bullish_dates = signal_dates(increasing, eps_yearly, window=3)
+emp_bullish_dates = signal_dates(decreasing, bls_unemployment_df, window=3)
 
-eps_bearish_dates: pd.DatetimeIndex = signal_dates(bearish, eps_yearly, window=3)
-emp_bearish_dates: pd.DatetimeIndex = signal_dates(bearish, bls_unemployment_df, window=3)
+eps_bearish_dates: pd.DatetimeIndex = signal_dates(decreasing, eps_yearly, window=3)
+emp_bearish_dates: pd.DatetimeIndex = signal_dates(increasing, bls_unemployment_df, window=3)
 
 eps_ix_l = get_market_indexes(spy_close_df, eps_bearish_dates)
 spy_eps_bear_df = spy_close_df.iloc[eps_ix_l]
