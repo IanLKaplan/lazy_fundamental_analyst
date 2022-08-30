@@ -25,6 +25,21 @@ import tempfile
 plt.style.use('seaborn-whitegrid')
 
 
+def df_concat(df1: pd.DataFrame, df2: pd.DataFrame) -> pd.DataFrame:
+    """
+    Concatenate two DataFrame objects with Datetime indexes. By forcing
+    conversion to a Datetime index this can avoid mismatches on
+    concatenation due to time (hours, minutes and seconds).
+    :param df1:
+    :param df2:
+    :return:
+    """
+    df1.index = pd.to_datetime(df1.index)
+    df2.index = pd.to_datetime(df2.index)
+    df_concat = pd.concat([df1, df2], axis=1)
+    return df_concat
+
+
 def convert_date(some_date):
     if type(some_date) == str:
         some_date = datetime.fromisoformat(some_date)
@@ -256,6 +271,9 @@ def get_market_data(file_name: str,
             symbols = t
         panel_data: pd.DataFrame = data.DataReader(symbols, data_source, start_date, end_date)
         close_data: pd.DataFrame = panel_data[data_col]
+        ix = close_data.index
+        ix = pd.to_datetime(ix)
+        close_data.index = ix
         close_data.to_csv(file_path)
     assert len(close_data) > 0, f'Error reading data for {symbols}'
     return close_data
@@ -325,13 +343,13 @@ emp_bearish_dates: pd.DatetimeIndex = signal_dates(increasing, bls_unemployment_
 
 eps_ix_l = get_market_indexes(spy_close_df, eps_bearish_dates)
 spy_eps_bear_df = spy_close_df.iloc[eps_ix_l]
-plot_hedge(spy_close_df, spy_eps_bear_df, 'EPS Momentum Bear Signal')
-plt.show()
+# plot_hedge(spy_close_df, spy_eps_bear_df, 'EPS Momentum Bear Signal')
+# plt.show()
 
 emp_ix_l = get_market_indexes(spy_close_df, emp_bearish_dates)
 spy_emp_bear_df = spy_close_df.iloc[emp_ix_l]
-plot_hedge(spy_close_df, spy_emp_bear_df, "Employment Momentum Bear Signal")
-plt.show()
+# plot_hedge(spy_close_df, spy_emp_bear_df, "Employment Momentum Bear Signal")
+# plt.show()
 
 
 if len(eps_bearish_dates) >= len(emp_bearish_dates):
@@ -341,12 +359,139 @@ else:
     bearish_dates_ = eps_bearish_dates.isin(emp_bearish_dates)
     bearish_dates = eps_bearish_dates[bearish_dates_]
 
-
 ix_l = get_market_indexes(spy_close_df, bearish_dates)
 spy_bear_df: pd.DataFrame = spy_close_df.iloc[ix_l]
 spy_bear_df.columns = ['Hedge']
 
-plot_hedge(spy_close_df, spy_bear_df, 'EPS and Unemployment Momentum Bear Signal')
-plt.show()
+# plot_hedge(spy_close_df, spy_bear_df, 'EPS and Unemployment Momentum Bear Signal')
+# plt.show()
+
+sh_data_file = 'sh_close.csv'
+sh_close_df = get_market_data(file_name=sh_data_file,
+                              data_col='Close',
+                              symbols=['sh'],
+                              data_source='yahoo',
+                              start_date=start_date,
+                              end_date=end_date)
+
+qqq_data_file = 'qqq_close.csv'
+qqq_close_df = get_market_data(file_name=qqq_data_file,
+                               data_col='Close',
+                               symbols=['qqq'],
+                               data_source='yahoo',
+                               start_date=start_date,
+                               end_date=end_date)
+
+spy_and_sh_df = df_concat(spy_close_df, sh_close_df)
+
+
+# spy_and_sh_df.plot(grid=True, title='SPY and SH', figsize=(10,6))
+# plt.show()
+
+def find_month_periods(start_date: datetime, end_date: datetime, data: pd.DataFrame) -> pd.DataFrame:
+    start_date = convert_date(start_date)
+    end_date = convert_date(end_date)
+    date_index = data.index
+    start_ix = findDateIndex(date_index, start_date)
+    end_ix = findDateIndex(date_index, end_date)
+    start_l = list()
+    end_l = list()
+    cur_month = start_date.month
+    start_l.append(start_ix)
+    i = 0
+    for i in range(start_ix, end_ix + 1):
+        date_i = convert_date(date_index[i])
+        if date_i.month != cur_month:
+            end_l.append(i - 1)
+            start_l.append(i)
+            cur_month = date_i.month
+    end_l.append(i)
+    # if there is not a full month period, remove the last period
+    if end_l[-1] - start_l[-1] < 18:
+        end_l.pop()
+        start_l.pop()
+    start_df = pd.DataFrame(start_l)
+    end_df = pd.DataFrame(end_l)
+    start_date_df = pd.DataFrame(date_index[start_l])
+    end_date_df = pd.DataFrame(date_index[end_l])
+    periods_df = pd.concat([start_df, start_date_df, end_df, end_date_df], axis=1)
+    periods_df.columns = ['start_ix', 'start_date', 'end_ix', 'end_date']
+    return periods_df
+
+
+def collapse_asset_df(asset_df: pd.DataFrame) -> pd.DataFrame:
+    """
+
+    :param asset_df: columns: asset, start_date, end_date
+    :return:
+    """
+    row_l = list()
+    row = asset_df[0:1]
+    cur_asset = row['asset'][0]
+    row_l.append(row)
+    row_ix = 0
+    for index in range(1, asset_df.shape[0]):
+        next_row = asset_df[:][index:index + 1]
+        next_asset = next_row['asset'][0]
+        if next_asset == cur_asset:
+            next_end_date = next_row['end_date'][0]
+            last_row = row_l[row_ix]
+            last_row.columns = asset_df.columns
+            t_l = [last_row['asset'][0], last_row['start_date'][0], next_end_date]
+            t_df = pd.DataFrame(t_l).transpose()
+            t_df.columns = asset_df.columns
+            row_l[row_ix] = t_df
+        else:
+            row_l.append(next_row)
+            row_ix = row_ix + 1
+            cur_asset = next_asset
+    collapse_df = pd.DataFrame()
+    for i in range(len(row_l)):
+        collapse_df = pd.concat([collapse_df, row_l[i]], axis=0)
+    return collapse_df
+
+
+def get_asset_investments(risk_asset: pd.DataFrame,
+                          bond_asset: pd.DataFrame,
+                          spy_data: SpyData,
+                          start_date: datetime,
+                          end_date: datetime) -> pd.DataFrame:
+    """
+    :param risk_asset: the risk asset set
+    :param bond_asset: the bond asset set
+    :param spy_data:  SpyData object
+    :param start_date: the start date for the period over which the calculation is performed.
+    :param end_date: the end date for the period over which the calculation is performed.
+    :return: a data frame with the columns: asset, start_date, end_date
+            The asset will be the asset symbol (e.g., 'SPY', 'QQQ', etc)  The
+            start date will be the start_date on which the asset should be purchased.
+            The date is an ISO date in string format. The end_date is the date that
+            the asset should be sold.
+    """
+    name_l: List = []
+    date_l: List = []
+    end_date_l: List = []
+    month_periods = find_month_periods(start_date, end_date, risk_asset)
+    for index, period in month_periods.iterrows():
+        month_start_ix = period['start_ix']
+        month_end_ix = period['end_ix']
+        # back_start_ix is the start of the look back period used to calculate the highest returning asset
+        back_start_ix = (month_start_ix - trading_quarter) if (month_start_ix - trading_quarter) >= 0 else 0
+        period_start_date: datetime = convert_date(period['start_date'])
+        period_end_date: datetime = convert_date(period['end_date'])
+        date_l.append(period_start_date)
+        end_date_l.append(period_end_date)
+        asset_name = ''
+        if spy_data.risk_state(period_start_date) == RiskState.RISK_ON:
+            asset_name: str = chooseAssetName(back_start_ix, month_start_ix, risk_asset)
+        else:  # RISK_OFF - bonds
+            asset_name: str = chooseAssetName(back_start_ix, month_start_ix, bond_asset)
+        name_l.append(asset_name)
+    asset_df = pd.DataFrame([name_l, date_l, end_date_l]).transpose()
+    asset_df.index = date_l
+    asset_df.columns = ['asset', 'start_date', 'end_date']
+    asset_df = collapse_asset_df(asset_df=asset_df)
+    return asset_df
+
 
 pass
