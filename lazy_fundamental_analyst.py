@@ -24,6 +24,8 @@ import tempfile
 
 plt.style.use('seaborn-whitegrid')
 
+trading_days = 252
+
 
 def df_concat(df1: pd.DataFrame, df2: pd.DataFrame) -> pd.DataFrame:
     """
@@ -451,47 +453,75 @@ def collapse_asset_df(asset_df: pd.DataFrame) -> pd.DataFrame:
     return collapse_df
 
 
-def get_asset_investments(risk_asset: pd.DataFrame,
-                          bond_asset: pd.DataFrame,
-                          spy_data: SpyData,
-                          start_date: datetime,
-                          end_date: datetime) -> pd.DataFrame:
+def hedge_portfolio(yearly_eps: pd.DataFrame, unemployment: pd.DataFrame, start_date: datetime) -> bool:
     """
-    :param risk_asset: the risk asset set
-    :param bond_asset: the bond asset set
-    :param spy_data:  SpyData object
-    :param start_date: the start date for the period over which the calculation is performed.
-    :param end_date: the end date for the period over which the calculation is performed.
-    :return: a data frame with the columns: asset, start_date, end_date
-            The asset will be the asset symbol (e.g., 'SPY', 'QQQ', etc)  The
-            start date will be the start_date on which the asset should be purchased.
-            The date is an ISO date in string format. The end_date is the date that
-            the asset should be sold.
+    All dates for the EPS data and the unemployment date are on the first of the month
+    :param start_date:
+    :return:
+    """
+    window = 3
+    index_date = datetime(start_date.year, start_date.month, 1)
+    eps_index = yearly_eps.index
+    eps_ix_now = findDateIndex(eps_index, index_date)
+    eps_ix_past = eps_ix_now - window
+    assert eps_ix_past >= 0
+    unemployment_index = unemployment.index
+    emp_ix_now = findDateIndex(unemployment_index, index_date)
+    emp_ix_past = emp_ix_now - 3
+    assert emp_ix_past >= 0
+    hedge = False
+    if (yearly_eps.iloc[eps_ix_now].values[0] < yearly_eps.iloc[eps_ix_past].values[0]) and \
+            (unemployment.iloc[emp_ix_now].values[0] > unemployment.iloc[emp_ix_past].values[0]):
+        hedge = True
+    return hedge
+
+
+def get_portfolio_hedge(portfolio_asset: pd.DataFrame,
+                        hedge_asset_sym: str,
+                        start_date: datetime,
+                        end_date: datetime,
+                        yearly_eps: pd.DataFrame,
+                        unemployment: pd.DataFrame) -> pd.DataFrame:
+    """
+    :param portfolio_asset:
+    :param hedge_asset_sym:
+    :param start_date:
+    :param end_date:
+    :return:
     """
     name_l: List = []
     date_l: List = []
     end_date_l: List = []
-    month_periods = find_month_periods(start_date, end_date, risk_asset)
+    month_periods = find_month_periods(start_date, end_date, portfolio_asset)
     for index, period in month_periods.iterrows():
-        month_start_ix = period['start_ix']
-        month_end_ix = period['end_ix']
-        # back_start_ix is the start of the look back period used to calculate the highest returning asset
-        back_start_ix = (month_start_ix - trading_quarter) if (month_start_ix - trading_quarter) >= 0 else 0
         period_start_date: datetime = convert_date(period['start_date'])
         period_end_date: datetime = convert_date(period['end_date'])
         date_l.append(period_start_date)
         end_date_l.append(period_end_date)
-        asset_name = ''
-        if spy_data.risk_state(period_start_date) == RiskState.RISK_ON:
-            asset_name: str = chooseAssetName(back_start_ix, month_start_ix, risk_asset)
-        else:  # RISK_OFF - bonds
-            asset_name: str = chooseAssetName(back_start_ix, month_start_ix, bond_asset)
+        asset_name = portfolio_asset.columns[0]
+        if hedge_portfolio(yearly_eps, unemployment, period_start_date):
+            asset_name = hedge_asset_sym
         name_l.append(asset_name)
     asset_df = pd.DataFrame([name_l, date_l, end_date_l]).transpose()
     asset_df.index = date_l
     asset_df.columns = ['asset', 'start_date', 'end_date']
     asset_df = collapse_asset_df(asset_df=asset_df)
     return asset_df
+
+
+def portfolio_return(holdings: float,
+                     portfolio_asset: pd.DataFrame,
+                     hedge_asset: pd.DataFrame,
+                     start_date: datetime,
+                     end_date: datetime,
+                     yearly_eps: pd.DataFrame,
+                     unemployment: pd.DataFrame) -> pd.DataFrame:
+
+    portfolio_start = datetime(start_date.year, start_date.month + 3, start_date.day)
+
+    t = get_portfolio_hedge(portfolio_asset=portfolio_asset, hedge_asset_sym=hedge_asset.columns[0],
+                            start_date=portfolio_start, end_date=end_date, yearly_eps=yearly_eps,
+                            unemployment=unemployment)
 
 
 pass
