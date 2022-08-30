@@ -126,7 +126,7 @@ class BLSData:
 
     See also https://www.bd-econ.com/blsapi.html
 
-    start_year: the numerical year (e.g., 2021) as a string
+    start_year: the numerical year (e.g., 2007) as a string
     end_year: same as start_year  start_year <= end_year
 
     This class writes the data out to a temp file, so that the file can be read
