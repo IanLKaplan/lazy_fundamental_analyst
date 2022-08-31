@@ -509,8 +509,7 @@ def get_portfolio_hedge(portfolio_asset: pd.DataFrame,
     return asset_df
 
 
-def portfolio_return(holdings: float,
-                     portfolio_asset: pd.DataFrame,
+def portfolio_return(portfolio_asset: pd.DataFrame,
                      hedge_asset: pd.DataFrame,
                      start_date: datetime,
                      end_date: datetime,
