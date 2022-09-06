@@ -1,7 +1,7 @@
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Callable
+from typing import List, Callable, Tuple
 
 import pandas as pd
 import numpy as np
@@ -384,7 +384,8 @@ qqq_close_df = get_market_data(file_name=qqq_data_file,
                                start_date=start_date,
                                end_date=end_date)
 
-spy_and_sh_df = df_concat(spy_close_df, sh_close_df)
+
+# spy_and_sh_df = df_concat(spy_close_df, sh_close_df)
 
 
 # spy_and_sh_df.plot(grid=True, title='SPY and SH', figsize=(10,6))
@@ -467,9 +468,11 @@ def hedge_portfolio(yearly_eps: pd.DataFrame, unemployment: pd.DataFrame, start_
     assert eps_ix_past >= 0
     unemployment_index = unemployment.index
     emp_ix_now = findDateIndex(unemployment_index, index_date)
-    emp_ix_past = emp_ix_now - 3
+    emp_ix_past = emp_ix_now - window
     assert emp_ix_past >= 0
     hedge = False
+    # If yearly S&P 500 earnings per share is lower than three months ago and
+    # unemployment is higher than it was three months ago, then hedge is true, otherwise, false
     if (yearly_eps.iloc[eps_ix_now].values[0] < yearly_eps.iloc[eps_ix_past].values[0]) and \
             (unemployment.iloc[emp_ix_now].values[0] > unemployment.iloc[emp_ix_past].values[0]):
         hedge = True
@@ -509,18 +512,161 @@ def get_portfolio_hedge(portfolio_asset: pd.DataFrame,
     return asset_df
 
 
-def portfolio_return(portfolio_asset: pd.DataFrame,
+def simple_return(time_series: np.array, period: int = 1) -> List:
+    return list(((time_series[i] / time_series[i - period]) - 1.0 for i in range(period, len(time_series), period)))
+
+
+def return_df(time_series_df: pd.DataFrame) -> pd.DataFrame:
+    r_df: pd.DataFrame = pd.DataFrame()
+    time_series_a: np.array = time_series_df.values
+    return_l = simple_return(time_series_a, 1)
+    r_df = pd.DataFrame(return_l)
+    date_index = time_series_df.index
+    r_df.index = date_index[1:len(date_index)]
+    r_df.columns = time_series_df.columns
+    return r_df
+
+
+def adjust_time_series(ts_one_df: pd.DataFrame, ts_two_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Adjust two DataFrame time series with overlapping date indices so that they
+    are the same length with the same date indices.
+    """
+    ts_one_index = pd.to_datetime(ts_one_df.index)
+    ts_two_index = pd.to_datetime(ts_two_df.index)
+    # filter the close prices
+    matching_dates = ts_one_index.isin(ts_two_index)
+    ts_one_adj = ts_one_df[matching_dates]
+    # filter the rf_prices
+    ts_one_index = pd.to_datetime(ts_one_adj.index)
+    matching_dates = ts_two_index.isin(ts_one_index)
+    ts_two_adj = ts_two_df[matching_dates]
+    return ts_one_adj, ts_two_adj
+
+
+def apply_return(start_val: float, return_df: pd.DataFrame) -> np.array:
+    port_a: np.array = np.zeros(return_df.shape[0] + 1)
+    port_a[0] = start_val
+    return_a = return_df.values
+    for i in range(1, len(port_a)):
+        port_a[i] = port_a[i - 1] + port_a[i - 1] * return_a[i - 1]
+    return port_a
+
+
+def build_plot_data(holdings: float, portfolio_df: pd.DataFrame, spy_df: pd.DataFrame) -> pd.DataFrame:
+    t_port_df, t_spy_df = adjust_time_series(portfolio_df, spy_df)
+    spy_return = return_df(t_spy_df)
+    spy_return_a = apply_return(start_val=holdings, return_df=spy_return)
+    spy_port = pd.DataFrame(spy_return_a)
+    spy_port.columns = ['SPY']
+    spy_port.index = pd.to_datetime(t_spy_df.index)
+    plot_df = t_port_df.copy()
+    plot_df['SPY'] = spy_port
+    return plot_df
+
+
+def hedge_return(portfolio_asset: pd.DataFrame,
+                 hedge_asset: pd.DataFrame,
+                 start_date: datetime,
+                 end_date: datetime,
+                 yearly_eps: pd.DataFrame,
+                 unemployment: pd.DataFrame) -> pd.DataFrame:
+    portfolio_start = datetime(start_date.year, start_date.month, start_date.day)
+
+    # asset_periods has the columns ['asset', 'start_date', 'end_date']
+    asset_periods = get_portfolio_hedge(portfolio_asset=portfolio_asset, hedge_asset_sym=hedge_asset.columns[0],
+                                        start_date=portfolio_start, end_date=end_date, yearly_eps=yearly_eps,
+                                        unemployment=unemployment)
+    composit_df = pd.concat([portfolio_asset, hedge_asset], axis=1)
+    portfolio_index = composit_df.index
+    all_return = pd.DataFrame()
+    for index, period in asset_periods.iterrows():
+        period_start_date = period['start_date']
+        period_end_date = period['end_date']
+        period_start_ix = findDateIndex(date_index=portfolio_index, search_date=period_start_date)
+        period_end_ix = findDateIndex(date_index=portfolio_index, search_date=period_end_date)
+        asset = period['asset']
+        period_s = composit_df[asset][period_start_ix - 1:period_end_ix + 1]
+        period_df = pd.DataFrame(period_s)
+        period_df.columns = ['return']
+        period_return_df = return_df(period_df)
+        all_return = pd.concat([all_return, period_return_df], axis=0)
+    start_period = asset_periods.iloc[0]
+    end_period = asset_periods.iloc[-1]
+    range_start_date = start_period['start_date']
+    range_end_date = end_period['end_date']
+    range_start_ix = findDateIndex(date_index=portfolio_index, search_date=range_start_date)
+    range_end_ix = findDateIndex(date_index=portfolio_index, search_date=range_end_date)
+    result_index = portfolio_index[range_start_ix:range_end_ix + 1]
+    all_return.index = result_index
+    return all_return
+
+
+def asset_return(asset_df: pd.DataFrame, start_date: datetime, end_date: datetime) -> pd.DataFrame:
+    asset_index = asset_df.index
+    start_ix = findDateIndex(date_index=asset_index, search_date=start_date)
+    end_ix = findDateIndex(date_index=asset_index, search_date=end_date)
+    assert start_ix > 0 and end_ix > 0
+    period_df = asset_df[:][start_ix - 1:end_ix + 1]
+    period_r = return_df(period_df)
+    return period_r
+
+
+def get_start_end_dates(data_df: pd.DataFrame) -> Tuple[datetime, datetime]:
+    num_rows = data_df.shape[0]
+    first_row = data_df[:][0:1]
+    last_row = data_df[:][num_rows - 1:num_rows]
+    start_date = convert_date(first_row.index[0])
+    end_date = convert_date(last_row.index[0])
+    return start_date, end_date
+
+
+test_start_date_str = '2008-01-02'
+test_start_date: datetime = datetime.fromisoformat(test_start_date_str)
+
+def hedged_portfolio(holdings: int,
+                     portfolio_asset: pd.DataFrame,
                      hedge_asset: pd.DataFrame,
                      start_date: datetime,
                      end_date: datetime,
                      yearly_eps: pd.DataFrame,
                      unemployment: pd.DataFrame) -> pd.DataFrame:
 
-    portfolio_start = datetime(start_date.year, start_date.month + 3, start_date.day)
+    hedge_r = hedge_return(portfolio_asset=portfolio_asset,
+                           hedge_asset=hedge_asset,
+                           start_date=start_date,
+                           end_date=end_date,
+                           yearly_eps=yearly_eps,
+                           unemployment=unemployment)
 
-    t = get_portfolio_hedge(portfolio_asset=portfolio_asset, hedge_asset_sym=hedge_asset.columns[0],
-                            start_date=portfolio_start, end_date=end_date, yearly_eps=yearly_eps,
-                            unemployment=unemployment)
+    hedge_start_date, hedge_end_date = get_start_end_dates(hedge_r)
 
+    asset_r = asset_return(asset_df=portfolio_asset, start_date=hedge_start_date, end_date=hedge_end_date)
+
+    total_r_a = (hedge_r.values + asset_r.values) / 2.0
+    total_r_df = pd.DataFrame(total_r_a)
+    total_r_df.index = hedge_r.index
+    column_str = f'{portfolio_asset.columns[0]}/{hedge_asset.columns[0]}'
+    total_r_df.columns = [column_str]
+    port_a = apply_return(start_val=holdings, return_df=total_r_df[:][1:])
+    port_df = pd.DataFrame(port_a)
+    port_df.index = total_r_df.index
+    port_df.columns = total_r_df.columns
+    return port_df
+
+
+holdings = 100000
+port_start_date_str = '2008-01-03'
+port_start_date: datetime = datetime.fromisoformat(port_start_date_str)
+port_df = hedged_portfolio(holdings=holdings,
+                           portfolio_asset=qqq_close_df,
+                           hedge_asset=sh_close_df,
+                           start_date=port_start_date,
+                           end_date=end_date,
+                           yearly_eps=eps_yearly,
+                           unemployment=bls_unemployment_df)
+plot_df = build_plot_data(holdings=holdings, portfolio_df=port_df, spy_df=spy_close_df)
+plot_df.plot(grid=True, title='QQQ/SH and SPY', figsize=(10, 6))
+plt.show()
 
 pass
