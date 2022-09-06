@@ -669,4 +669,18 @@ plot_df = build_plot_data(holdings=holdings, portfolio_df=port_df, spy_df=spy_cl
 plot_df.plot(grid=True, title='QQQ/SH and SPY', figsize=(10, 6))
 plt.show()
 
+d2010_start_date_str = '2010-01-02'
+d2010_start_date: datetime = datetime.fromisoformat(d2010_start_date_str)
+
+port_df = hedged_portfolio(holdings=holdings,
+                           portfolio_asset=qqq_close_df,
+                           hedge_asset=sh_close_df,
+                           start_date=d2010_start_date,
+                           end_date=end_date,
+                           yearly_eps=eps_yearly,
+                           unemployment=bls_unemployment_df)
+plot_df = build_plot_data(holdings=holdings, portfolio_df=port_df, spy_df=spy_close_df)
+plot_df.plot(grid=True, title='QQQ/SH and SPY 2010', figsize=(10, 6))
+plt.show()
+
 pass
