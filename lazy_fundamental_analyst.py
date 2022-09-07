@@ -621,9 +621,6 @@ def get_start_end_dates(data_df: pd.DataFrame) -> Tuple[datetime, datetime]:
     return start_date, end_date
 
 
-test_start_date_str = '2008-01-02'
-test_start_date: datetime = datetime.fromisoformat(test_start_date_str)
-
 def hedged_portfolio(holdings: int,
                      portfolio_asset: pd.DataFrame,
                      hedge_asset: pd.DataFrame,
@@ -668,6 +665,7 @@ port_df = hedged_portfolio(holdings=holdings,
 plot_df = build_plot_data(holdings=holdings, portfolio_df=port_df, spy_df=spy_close_df)
 plot_df.plot(grid=True, title='QQQ/SH and SPY', figsize=(10, 6))
 plt.show()
+
 
 d2010_start_date_str = '2010-01-02'
 d2010_start_date: datetime = datetime.fromisoformat(d2010_start_date_str)
