@@ -1,3 +1,4 @@
+
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -23,9 +24,6 @@ import jsonpickle as jp
 import tempfile
 
 plt.style.use('seaborn-whitegrid')
-
-trading_days = 252
-
 
 def df_concat(df1: pd.DataFrame, df2: pd.DataFrame) -> pd.DataFrame:
     """
@@ -77,7 +75,6 @@ start_date: datetime = datetime.fromisoformat(start_date_str)
 # The "current date"
 end_date: datetime = datetime.today() - timedelta(days=1)
 
-
 class NASDQData:
     """
     eps_start_date: the data that the rolling 12-month sum should start at
@@ -128,10 +125,7 @@ class NASDQData:
 nasdq_data = NASDQData(start_date)
 eps_yearly = nasdq_data.get_s_and_p_earnings()
 
-
-# eps_yearly.plot(grid=True, title="Yearly S&P 500 Earnings per share, by month", figsize=(10, 6))
-# plt.show()
-
+# eps_yearly.plot(grid=True, title="Yearly S&P 500 Earnings yield", figsize=(10, 6))
 
 class BLSData:
     """
@@ -150,7 +144,6 @@ class BLSData:
     in subsequent runs.  This avoids running into the BLS daily download limit.
     This also improves performance.
     """
-
     def __init__(self, start_year: str, end_year: str):
         self.start_year = start_year
         self.end_year = end_year
@@ -230,14 +223,10 @@ class BLSData:
 bls_start_year: str = '2007'
 bls_end_year: str = str(datetime.today().year)
 bls_data = BLSData(bls_start_year, bls_end_year)
-#
-# Round to a whole number since fractional unemployment values are not very accurate
-# (e.g., there is a lot of noise in unemployment numbers)
+
 bls_unemployment_df = round(bls_data.get_unemployment_data(), 2)
 
-
 # bls_unemployment_df.plot(grid=True, title='Monthly Unemployment Rate (percent)', figsize=(10, 6))
-# plt.show()
 
 def get_market_data(file_name: str,
                     data_col: str,
@@ -273,11 +262,12 @@ def get_market_data(file_name: str,
             symbols = t
         panel_data: pd.DataFrame = data.DataReader(symbols, data_source, start_date, end_date)
         close_data: pd.DataFrame = panel_data[data_col]
-        ix = close_data.index
-        ix = pd.to_datetime(ix)
-        close_data.index = ix
         close_data.to_csv(file_path)
     assert len(close_data) > 0, f'Error reading data for {symbols}'
+    ix = close_data.index
+    if type(ix) == pd.Index:
+        ix = pd.to_datetime(ix)
+        close_data.index = ix
     return close_data
 
 
@@ -328,6 +318,12 @@ def get_market_indexes(market_df: pd.DataFrame, index_dates: DatetimeIndex) -> L
             print(f'Did not find date {date_}')
     return ix_l
 
+# The EPS and unemployment data is monthly data, so the window size is three
+eps_bullish_dates = signal_dates(increasing, eps_yearly, window=3)
+emp_bullish_dates = signal_dates(decreasing, bls_unemployment_df, window=3)
+
+eps_bearish_dates: pd.DatetimeIndex = signal_dates(decreasing, eps_yearly, window=3)
+emp_bearish_dates: pd.DatetimeIndex = signal_dates(increasing, bls_unemployment_df, window=3)
 
 spy_data_file = 'spy_adj_close.csv'
 spy_close_df = get_market_data(file_name=spy_data_file,
@@ -337,22 +333,13 @@ spy_close_df = get_market_data(file_name=spy_data_file,
                                start_date=start_date,
                                end_date=end_date)
 
-eps_bullish_dates = signal_dates(increasing, eps_yearly, window=3)
-emp_bullish_dates = signal_dates(decreasing, bls_unemployment_df, window=3)
-
-eps_bearish_dates: pd.DatetimeIndex = signal_dates(decreasing, eps_yearly, window=3)
-emp_bearish_dates: pd.DatetimeIndex = signal_dates(increasing, bls_unemployment_df, window=3)
-
 eps_ix_l = get_market_indexes(spy_close_df, eps_bearish_dates)
 spy_eps_bear_df = spy_close_df.iloc[eps_ix_l]
 # plot_hedge(spy_close_df, spy_eps_bear_df, 'EPS Momentum Bear Signal')
-# plt.show()
 
 emp_ix_l = get_market_indexes(spy_close_df, emp_bearish_dates)
 spy_emp_bear_df = spy_close_df.iloc[emp_ix_l]
-# plot_hedge(spy_close_df, spy_emp_bear_df, "Employment Momentum Bear Signal")
-# plt.show()
-
+# plot_hedge(spy_close_df, spy_emp_bear_df, "Unemployment Momentum Bear Signal")
 
 if len(eps_bearish_dates) >= len(emp_bearish_dates):
     bearish_dates_ = emp_bearish_dates.isin(eps_bearish_dates)
@@ -361,20 +348,20 @@ else:
     bearish_dates_ = eps_bearish_dates.isin(emp_bearish_dates)
     bearish_dates = eps_bearish_dates[bearish_dates_]
 
+
 ix_l = get_market_indexes(spy_close_df, bearish_dates)
 spy_bear_df: pd.DataFrame = spy_close_df.iloc[ix_l]
 spy_bear_df.columns = ['Hedge']
 
 # plot_hedge(spy_close_df, spy_bear_df, 'EPS and Unemployment Momentum Bear Signal')
-# plt.show()
 
 sh_data_file = 'sh_close.csv'
 sh_close_df = get_market_data(file_name=sh_data_file,
-                              data_col='Close',
-                              symbols=['sh'],
-                              data_source='yahoo',
-                              start_date=start_date,
-                              end_date=end_date)
+                               data_col='Close',
+                               symbols=['sh'],
+                               data_source='yahoo',
+                               start_date=start_date,
+                               end_date=end_date)
 
 qqq_data_file = 'qqq_close.csv'
 qqq_close_df = get_market_data(file_name=qqq_data_file,
@@ -384,12 +371,9 @@ qqq_close_df = get_market_data(file_name=qqq_data_file,
                                start_date=start_date,
                                end_date=end_date)
 
-
-# spy_and_sh_df = df_concat(spy_close_df, sh_close_df)
-
+spy_and_sh_df = df_concat(spy_close_df, sh_close_df)
 
 # spy_and_sh_df.plot(grid=True, title='SPY and SH', figsize=(10,6))
-# plt.show()
 
 def find_month_periods(start_date: datetime, end_date: datetime, data: pd.DataFrame) -> pd.DataFrame:
     start_date = convert_date(start_date)
@@ -585,6 +569,7 @@ def hedge_return(portfolio_asset: pd.DataFrame,
         period_end_date = period['end_date']
         period_start_ix = findDateIndex(date_index=portfolio_index, search_date=period_start_date)
         period_end_ix = findDateIndex(date_index=portfolio_index, search_date=period_end_date)
+        assert period_start_ix > 0 and period_end_ix > 0
         asset = period['asset']
         period_s = composit_df[asset][period_start_ix - 1:period_end_ix + 1]
         period_df = pd.DataFrame(period_s)
@@ -662,8 +647,10 @@ port_df = hedged_portfolio(holdings=holdings,
                            end_date=end_date,
                            yearly_eps=eps_yearly,
                            unemployment=bls_unemployment_df)
+
 plot_df = build_plot_data(holdings=holdings, portfolio_df=port_df, spy_df=spy_close_df)
-plot_df.plot(grid=True, title='QQQ/SH and SPY', figsize=(10, 6))
+
+plot_df.plot(grid=True, title=f'QQQ/SH and SPY from {port_start_date}', figsize=(10, 6))
 plt.show()
 
 
@@ -677,8 +664,10 @@ port_df = hedged_portfolio(holdings=holdings,
                            end_date=end_date,
                            yearly_eps=eps_yearly,
                            unemployment=bls_unemployment_df)
+
 plot_df = build_plot_data(holdings=holdings, portfolio_df=port_df, spy_df=spy_close_df)
-plot_df.plot(grid=True, title='QQQ/SH and SPY 2010', figsize=(10, 6))
+
+plot_df.plot(grid=True, title=f'QQQ/SH and SPY from {d2010_start_date}', figsize=(10, 6))
 plt.show()
 
 pass
