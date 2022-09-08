@@ -720,4 +720,17 @@ for sym in sector_close.columns:
                 end_date=end_date)
     plt.show()
 
+xle_close_df = pd.DataFrame(sector_close['XLE'])
+xle_df = hedged_portfolio(holdings=holdings,
+                          portfolio_asset=xle_close_df,
+                          hedge_asset=sh_close_df,
+                          start_date=port_start_date,
+                          end_date=end_date,
+                          yearly_eps=eps_yearly,
+                          unemployment=bls_unemployment_df)
+
+plot_df = build_plot_data(holdings=holdings, portfolio_df=xle_df, benchmark=xle_close_df)
+plot_df.plot(grid=True, title=f'XLE/SH and XLE from {port_start_date.strftime("%m/%d/%Y")}', figsize=(10, 6))
+plt.show()
+
 pass
