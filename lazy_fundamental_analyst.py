@@ -1,4 +1,3 @@
-
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -24,6 +23,7 @@ import jsonpickle as jp
 import tempfile
 
 plt.style.use('seaborn-whitegrid')
+
 
 def df_concat(df1: pd.DataFrame, df2: pd.DataFrame) -> pd.DataFrame:
     """
@@ -75,6 +75,7 @@ start_date: datetime = datetime.fromisoformat(start_date_str)
 # The "current date"
 end_date: datetime = datetime.today() - timedelta(days=1)
 
+
 class NASDQData:
     """
     eps_start_date: the data that the rolling 12-month sum should start at
@@ -125,6 +126,7 @@ class NASDQData:
 nasdq_data = NASDQData(start_date)
 eps_yearly = nasdq_data.get_s_and_p_earnings()
 
+
 # eps_yearly.plot(grid=True, title="Yearly S&P 500 Earnings yield", figsize=(10, 6))
 
 class BLSData:
@@ -144,6 +146,7 @@ class BLSData:
     in subsequent runs.  This avoids running into the BLS daily download limit.
     This also improves performance.
     """
+
     def __init__(self, start_year: str, end_year: str):
         self.start_year = start_year
         self.end_year = end_year
@@ -226,6 +229,7 @@ bls_data = BLSData(bls_start_year, bls_end_year)
 
 bls_unemployment_df = round(bls_data.get_unemployment_data(), 2)
 
+
 # bls_unemployment_df.plot(grid=True, title='Monthly Unemployment Rate (percent)', figsize=(10, 6))
 
 def get_market_data(file_name: str,
@@ -262,6 +266,7 @@ def get_market_data(file_name: str,
             symbols = t
         panel_data: pd.DataFrame = data.DataReader(symbols, data_source, start_date, end_date)
         close_data: pd.DataFrame = panel_data[data_col]
+        close_data = round(close_data, 2)
         close_data.to_csv(file_path)
     assert len(close_data) > 0, f'Error reading data for {symbols}'
     ix = close_data.index
@@ -318,6 +323,7 @@ def get_market_indexes(market_df: pd.DataFrame, index_dates: DatetimeIndex) -> L
             print(f'Did not find date {date_}')
     return ix_l
 
+
 # The EPS and unemployment data is monthly data, so the window size is three
 eps_bullish_dates = signal_dates(increasing, eps_yearly, window=3)
 emp_bullish_dates = signal_dates(decreasing, bls_unemployment_df, window=3)
@@ -348,7 +354,6 @@ else:
     bearish_dates_ = eps_bearish_dates.isin(emp_bearish_dates)
     bearish_dates = eps_bearish_dates[bearish_dates_]
 
-
 ix_l = get_market_indexes(spy_close_df, bearish_dates)
 spy_bear_df: pd.DataFrame = spy_close_df.iloc[ix_l]
 spy_bear_df.columns = ['Hedge']
@@ -357,11 +362,11 @@ spy_bear_df.columns = ['Hedge']
 
 sh_data_file = 'sh_close.csv'
 sh_close_df = get_market_data(file_name=sh_data_file,
-                               data_col='Close',
-                               symbols=['sh'],
-                               data_source='yahoo',
-                               start_date=start_date,
-                               end_date=end_date)
+                              data_col='Close',
+                              symbols=['sh'],
+                              data_source='yahoo',
+                              start_date=start_date,
+                              end_date=end_date)
 
 qqq_data_file = 'qqq_close.csv'
 qqq_close_df = get_market_data(file_name=qqq_data_file,
@@ -372,6 +377,7 @@ qqq_close_df = get_market_data(file_name=qqq_data_file,
                                end_date=end_date)
 
 spy_and_sh_df = df_concat(spy_close_df, sh_close_df)
+
 
 # spy_and_sh_df.plot(grid=True, title='SPY and SH', figsize=(10,6))
 
@@ -537,15 +543,15 @@ def apply_return(start_val: float, return_df: pd.DataFrame) -> np.array:
     return port_a
 
 
-def build_plot_data(holdings: float, portfolio_df: pd.DataFrame, spy_df: pd.DataFrame) -> pd.DataFrame:
-    t_port_df, t_spy_df = adjust_time_series(portfolio_df, spy_df)
-    spy_return = return_df(t_spy_df)
-    spy_return_a = apply_return(start_val=holdings, return_df=spy_return)
-    spy_port = pd.DataFrame(spy_return_a)
-    spy_port.columns = ['SPY']
-    spy_port.index = pd.to_datetime(t_spy_df.index)
+def build_plot_data(holdings: float, portfolio_df: pd.DataFrame, benchmark: pd.DataFrame) -> pd.DataFrame:
+    t_port_df, t_bench_df = adjust_time_series(portfolio_df, benchmark)
+    bench_return = return_df(t_bench_df)
+    bench_return_a = apply_return(start_val=holdings, return_df=bench_return)
+    bench_port = pd.DataFrame(bench_return_a)
+    bench_port.columns = [benchmark.columns[0]]
+    bench_port.index = pd.to_datetime(t_bench_df.index)
     plot_df = t_port_df.copy()
-    plot_df['SPY'] = spy_port
+    plot_df[benchmark.columns[0]] = bench_port
     return plot_df
 
 
@@ -613,7 +619,6 @@ def hedged_portfolio(holdings: int,
                      end_date: datetime,
                      yearly_eps: pd.DataFrame,
                      unemployment: pd.DataFrame) -> pd.DataFrame:
-
     hedge_r = hedge_return(portfolio_asset=portfolio_asset,
                            hedge_asset=hedge_asset,
                            start_date=start_date,
@@ -648,10 +653,10 @@ port_df = hedged_portfolio(holdings=holdings,
                            yearly_eps=eps_yearly,
                            unemployment=bls_unemployment_df)
 
-plot_df = build_plot_data(holdings=holdings, portfolio_df=port_df, spy_df=spy_close_df)
+plot_df = build_plot_data(holdings=holdings, portfolio_df=port_df, benchmark=spy_close_df)
 
-plot_df.plot(grid=True, title=f'QQQ/SH and SPY from {port_start_date}', figsize=(10, 6))
-plt.show()
+# plot_df.plot(grid=True, title=f'QQQ/SH and SPY from {port_start_date}', figsize=(10, 6))
+# plt.show()
 
 
 d2010_start_date_str = '2010-01-02'
@@ -665,9 +670,54 @@ port_df = hedged_portfolio(holdings=holdings,
                            yearly_eps=eps_yearly,
                            unemployment=bls_unemployment_df)
 
-plot_df = build_plot_data(holdings=holdings, portfolio_df=port_df, spy_df=spy_close_df)
+plot_df = build_plot_data(holdings=holdings, portfolio_df=port_df, benchmark=spy_close_df)
 
-plot_df.plot(grid=True, title=f'QQQ/SH and SPY from {d2010_start_date}', figsize=(10, 6))
-plt.show()
+
+# plot_df.plot(grid=True, title=f'QQQ/SH and SPY from {d2010_start_date}', figsize=(10, 6))
+# plt.show()
+
+
+def plot_sector(holdings: int,
+                portfolio_asset: pd.DataFrame,
+                hedge_asset: pd.DataFrame,
+                benchmark: pd.DataFrame,
+                yearly_eps: pd.DataFrame,
+                unemployment: pd.DataFrame,
+                start_date: datetime,
+                end_date: datetime
+                ) -> None:
+    port_df = hedged_portfolio(holdings=holdings,
+                               portfolio_asset=portfolio_asset,
+                               hedge_asset=hedge_asset,
+                               yearly_eps=yearly_eps,
+                               unemployment=unemployment,
+                               start_date=start_date,
+                               end_date=end_date, )
+    plot_df = build_plot_data(holdings=holdings, portfolio_df=port_df, benchmark=benchmark)
+    plot_title = f'{portfolio_asset.columns[0]}/{hedge_asset.columns[0]} and {benchmark.columns[0]} from {start_date.strftime("%m/%d/%Y")}'
+    plot_df.plot(grid=True, title=plot_title, figsize=(10, 6))
+
+
+sectorETF: list = ['VGT', 'VHT', 'VFH', 'VCR', 'VDC', 'XLE']
+
+sector_close_file = 'sector_close.csv'
+sector_close = get_market_data(file_name=sector_close_file,
+                               data_col='Adj Close',
+                               symbols=sectorETF,
+                               data_source='yahoo',
+                               start_date=start_date,
+                               end_date=end_date)
+
+for sym in sector_close.columns:
+    asset_df = pd.DataFrame(sector_close[sym])
+    plot_sector(holdings=holdings,
+                portfolio_asset=asset_df,
+                hedge_asset=sh_close_df,
+                benchmark=spy_close_df,
+                yearly_eps=eps_yearly,
+                unemployment=bls_unemployment_df,
+                start_date=port_start_date,
+                end_date=end_date)
+    plt.show()
 
 pass
